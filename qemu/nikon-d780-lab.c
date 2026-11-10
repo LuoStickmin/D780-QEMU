@@ -33,6 +33,7 @@
 #include "qapi/error.h"
 #include "qapi/visitor.h"
 #include "qemu/bswap.h"
+#include "qemu/host-utils.h"
 #include "qemu/error-report.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -264,7 +265,26 @@ typedef struct D750IoStub {
     uint32_t size;
     uint32_t *regs;
     uint32_t ticks;
+    uint32_t early[9];
+    uint64_t counter_epoch;
 } D750IoStub;
+
+/* Z6-family early control block (same addresses observed in D780 startup). */
+static int d780_early_index(uint64_t addr)
+{
+    switch (addr) {
+    case 0x04264000: return 0;
+    case 0x04264020: return 1;
+    case 0x04281020: return 2;
+    case 0x04281028: return 3;
+    case 0x0428102c: return 4;
+    case 0x04266000: return 5;
+    case 0x04266008: return 6;
+    case 0x0426600c: return 7;
+    case 0x04266010: return 8;
+    default: return -1;
+    }
+}
 
 static uint64_t d750_io_stub_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -273,11 +293,24 @@ static uint64_t d750_io_stub_read(void *opaque, hwaddr addr, unsigned size)
     if (s->base + addr == D750_IO_AE_READY) {
         return 1;
     }
-    /* E6 timer block 0x04266000: [base+8] is a free-running counter used by
-     * delay loops; return an advancing value on every read. */
-    if (s->base == 0x04200000 && addr == 0x66008) {
-        s->ticks += 0x1000;
-        return s->ticks;
+    /* Z6-style early control block: 0x04266000 is the control word,
+     * 0x04266008/0c form a 48 MHz counter latched while enabled. */
+    if (s->base == 0x04200000) {
+        int idx = d780_early_index(s->base + addr);
+
+        if (idx == 6 || idx == 7) {
+            uint64_t ticks = ((uint64_t)s->early[7] << 32) | s->early[6];
+
+            if (s->early[5] & 1) {
+                ticks += muldiv64(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)
+                                  - s->counter_epoch,
+                                  48000000, 1000000000);
+            }
+            return idx == 6 ? (uint32_t)ticks : (uint32_t)(ticks >> 32);
+        }
+        if (idx >= 0) {
+            return s->early[idx];
+        }
     }
     /* Many E6 channels use [page+4] as a completion/status word polled for
      * bit 0.  Report "done" there so command waits terminate. */
@@ -295,6 +328,27 @@ static void d750_io_stub_write(void *opaque, hwaddr addr, uint64_t value,
 {
     D750IoStub *s = opaque;
 
+    if (s->base == 0x04200000) {
+        int idx = d780_early_index(s->base + addr);
+
+        if (idx == 5) {
+            if ((value & 1) && !(s->early[5] & 1)) {
+                s->counter_epoch = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+            } else if (!(value & 1) && (s->early[5] & 1)) {
+                uint64_t ticks = ((uint64_t)s->early[7] << 32) | s->early[6];
+
+                ticks += muldiv64(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)
+                                  - s->counter_epoch,
+                                  48000000, 1000000000);
+                s->early[6] = (uint32_t)ticks;
+                s->early[7] = (uint32_t)(ticks >> 32);
+            }
+        }
+        if (idx >= 0) {
+            s->early[idx] = (uint32_t)value;
+            return;
+        }
+    }
     if (addr + size > s->size) {
         return;
     }
