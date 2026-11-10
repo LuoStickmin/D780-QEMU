@@ -82,6 +82,8 @@ typedef struct NikonD780MachineState {
     MemoryRegion aux2;          /* optional handler RAM (E5: 0x40000000)  */
     MemoryRegion e6sram;        /* E6 boot SRAM at 0x04000000              */
     MemoryRegion e6stack;       /* E6 stacks at 0xC0000000                 */
+    MemoryRegion e6vec;         /* E6 relocated vector table at 0xCC300000 */
+
     MemoryRegion probe;         /* catch-all diagnostic window             */
     MemoryRegion uart;          /* candidate byte-register serial block    */
 
@@ -109,6 +111,7 @@ typedef struct NikonD780MachineState {
     bool e6_prep;               /* patch the D780 page table + map stacks  */
     struct D750IoStub *io_blocks[4];
     struct D750IoStub *e6_io;
+    struct D750IoStub *e6_extra[3];
 
     uint64_t mpcore_base;       /* GIC/timers/watchdog block address       */
     bool strict;
@@ -1603,6 +1606,37 @@ static void nikon_d750_init(MachineState *machine)
                               "nikon-d780.io-0420", st->size);
         memory_region_add_subregion(sysmem, st->base, &st->mr);
         s->e6_io = st;
+
+        /* Extra E6 blocks seen after the scheduler wait (0x2C09xxxx and
+         * 0x24074xxx).  Register-file stubs so the run keeps going. */
+        {
+            static const struct {
+                uint64_t base;
+                uint32_t size;
+            } extras[] = {
+                { 0x2C090000, 0x1000 },
+                { 0x24074000, 0x1000 },
+            };
+            unsigned i;
+
+            for (i = 0; i < ARRAY_SIZE(extras); i++) {
+                struct D750IoStub *x = g_new0(struct D750IoStub, 1);
+
+                x->base = extras[i].base;
+                x->size = extras[i].size;
+                x->regs = g_new0(uint32_t, x->size / 4);
+                memory_region_init_io(&x->mr, OBJECT(s), &d750_io_stub_ops, x,
+                                      "nikon-d780.io-extra", x->size);
+                memory_region_add_subregion(sysmem, x->base, &x->mr);
+                s->e6_extra[i] = x;
+            }
+        }
+
+        /* The image copies its vector table to 0xCC300000; it must be
+         * executable RAM, not an I/O register file. */
+        memory_region_init_ram(&s->e6vec, NULL, "nikon-d780.e6vec",
+                               0x20000, &error_fatal);
+        memory_region_add_subregion(sysmem, 0xCC300000, &s->e6vec);
 
         if (!s->auxram_size) {
             memory_region_init_ram(&s->auxram, NULL, "nikon-d780.e6ram",
