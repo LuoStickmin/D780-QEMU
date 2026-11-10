@@ -245,6 +245,7 @@ def build_command(qemu: Path, args: argparse.Namespace, run_dir: Path,
         str(qemu), "-M", machine,
         "-cpu", args.cpu,
         "-m", args.ram,
+        "-smp", str(args.smp),
         "-display", "none",
         "-monitor", "none",
         "-serial", "file:" + str(run_dir / "uart.log").replace("\\", "/"),
@@ -326,6 +327,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--qemu", help="qemu-system-arm binary")
     parser.add_argument("--cpu", default=DEFAULT_CPU)
     parser.add_argument("--ram", default="128M")
+    parser.add_argument("--smp", type=int, default=2,
+                        help="CPU count (D780 needs 2; one CPU waits at 0x1011C014)")
     parser.add_argument("--boot", choices=("stub", "entry"), default=DEFAULT_BOOT,
                         help="startup mode: 'stub' runs the b1010 boot chain and "
                              "hands off to a1010 (M1, default); 'entry' starts at "
