@@ -1560,6 +1560,8 @@ static void nikon_d750_init(MachineState *machine)
         rom_add_blob_fixed("d750.e6-ready", ready, sizeof(ready), 0x20022300);
         rom_add_blob_fixed("d750.e6-ready2", ready, sizeof(ready), 0x20070008);
         rom_add_blob_fixed("d750.e6-ready3", ready, sizeof(ready), 0x20010038);
+        stl_le_p(ready, 0xBABEBABE);
+        rom_add_blob_fixed("d750.e6-mailbox", ready, sizeof(ready), 0x04008FFC);
     }
 
     /* EXPEED 4 register-block stubs: A2/AD/AE/A340. */
