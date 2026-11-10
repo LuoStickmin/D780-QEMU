@@ -59,6 +59,26 @@ python3 tools/run.py \
 机器默认已经带 `payload-base=0x10020000`、`flash-size=0x2400000`、
 `e6-prep=on`，一般不需要再传。
 
+## GUI（boot monitor）
+
+仿 z6-qemu 的浏览器控制器，纯标准库、无第三方依赖：
+
+```sh
+# WSL / Linux
+python3 tools/gui.py \
+  --payload /path/to/eg1510_012100.bi \
+  --qemu /path/to/qemu-system-arm
+# 浏览器打开 http://127.0.0.1:8787/
+```
+
+- 实时显示 stage、last PC、SVC、undef/prefetch/data、probe（含最后地址）、
+  translated blocks；
+- PC trail 与 QEMU 日志尾部；
+- Start / Stop / Restart；
+- 不渲染 framebuffer（D780 还没有 LCD 模型），是启动监视器；
+- 日志默认写 `/tmp/d780-gui/`（WSL 下避免 `/mnt/c` 慢 I/O），可用
+  `D780_GUI_RUNS` 覆盖；`--cpu/--ram/--smp/--port/--bind` 可调。
+
 ## 还需要什么（输入需求）
 
 D780（E6）与 D750（E4）、D850/D5（E5）一样，缺的都是**第一级 boot**。
