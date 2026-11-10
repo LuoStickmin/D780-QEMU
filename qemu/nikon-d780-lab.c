@@ -72,6 +72,7 @@ enum {
 };
 
 struct D750IoStub;
+struct D780Uart;
 
 typedef struct NikonD780MachineState {
     MachineState parent;
@@ -84,6 +85,7 @@ typedef struct NikonD780MachineState {
     MemoryRegion e6stack;       /* E6 stacks at 0xC0000000                 */
     MemoryRegion e6vec;         /* E6 relocated vector table at 0xCC300000 */
     MemoryRegion fb;            /* E6 display surface page at 0xCC200000   */
+    MemoryRegion mcu;           /* 0x2004A000 companion-ready page         */
 
     MemoryRegion probe;         /* catch-all diagnostic window             */
     MemoryRegion uart;          /* candidate byte-register serial block    */
@@ -114,6 +116,7 @@ typedef struct NikonD780MachineState {
     struct D750IoStub *io_blocks[4];
     struct D750IoStub *e6_io;
     struct D750IoStub *e6_extra[4];
+    struct D780Uart *dbg_uart;
 
     uint64_t mpcore_base;       /* GIC/timers/watchdog block address       */
     bool strict;
@@ -363,6 +366,72 @@ static void d750_io_stub_write(void *opaque, hwaddr addr, uint64_t value,
 static const MemoryRegionOps d750_io_stub_ops = {
     .read = d750_io_stub_read,
     .write = d750_io_stub_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 4,
+};
+
+/* 0x2C090000 is the debug UART, same layout as in the z6 model:
+ * +3 status (bit 1 = TX ready), +4 transmit, 16-byte channel. */
+typedef struct D780Uart {
+    MemoryRegion mr;
+    uint8_t regs[16];
+} D780Uart;
+
+static uint64_t d780_uart_read(void *opaque, hwaddr addr, unsigned size)
+{
+    D780Uart *u = opaque;
+    uint64_t v = 0;
+    unsigned i;
+
+    for (i = 0; i < size; i++) {
+        uint8_t b = u->regs[addr + i];
+
+        if (addr + i == 3 && (u->regs[1] & 1)) {
+            b |= 2; /* transmitter always ready: host consumes the byte */
+        }
+        v |= (uint64_t)b << (8 * i);
+    }
+    return v;
+}
+
+static void d780_uart_write(void *opaque, hwaddr addr, uint64_t value,
+                            unsigned size)
+{
+    D780Uart *u = opaque;
+    unsigned i;
+
+    for (i = 0; i < size; i++) {
+        u->regs[addr + i] = (uint8_t)(value >> (8 * i));
+    }
+    if (addr == 4 && (u->regs[1] & 1)) {
+        qemu_log("%c", (int)(value & 0xff));
+    }
+}
+
+static const MemoryRegionOps d780_uart_ops = {
+    .read = d780_uart_read,
+    .write = d780_uart_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 8,
+};
+
+/* 0x2004A000 "companion ready" page: the early init polls [0x2004A030] and
+ * friends for bit 0.  Return 1 so those handshakes succeed. */
+static uint64_t d780_ready_read(void *opaque, hwaddr addr, unsigned size)
+{
+    return 1;
+}
+
+static void d780_ready_write(void *opaque, hwaddr addr, uint64_t value,
+                             unsigned size)
+{
+}
+
+static const MemoryRegionOps d780_ready_ops = {
+    .read = d780_ready_read,
+    .write = d780_ready_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid.min_access_size = 1,
     .valid.max_access_size = 4,
@@ -1631,7 +1700,6 @@ static void nikon_d750_init(MachineState *machine)
                 uint64_t base;
                 uint32_t size;
             } extras[] = {
-                { 0x2C090000, 0x1000 },
                 { 0x24040000, 0x40000 },
                 { 0x20180000, 0x10000 },
             };
@@ -1640,6 +1708,9 @@ static void nikon_d750_init(MachineState *machine)
             for (i = 0; i < ARRAY_SIZE(extras); i++) {
                 struct D750IoStub *x = g_new0(struct D750IoStub, 1);
 
+                if (extras[i].base == 0x2C090000 && getenv("D780_DEBUG_UART")) {
+                    continue; /* the real UART model owns this page */
+                }
                 x->base = extras[i].base;
                 x->size = extras[i].size;
                 x->regs = g_new0(uint32_t, x->size / 4);
@@ -1655,6 +1726,24 @@ static void nikon_d750_init(MachineState *machine)
         memory_region_init_ram(&s->e6vec, NULL, "nikon-d780.e6vec",
                                0x20000, &error_fatal);
         memory_region_add_subregion(sysmem, 0xCC300000, &s->e6vec);
+
+        /* Debug UART at 0x2C090000: log transmitted characters.  Optional:
+         * the plain register-file stub keeps the normal boot path unchanged,
+         * D780_DEBUG_UART=1 swaps in the real UART model for experiments. */
+        if (getenv("D780_DEBUG_UART")) {
+            s->dbg_uart = g_new0(struct D780Uart, 1);
+            memory_region_init_io(&s->dbg_uart->mr, OBJECT(s), &d780_uart_ops,
+                                  s->dbg_uart, "nikon-d780.uart", 16);
+            memory_region_add_subregion(sysmem, 0x2C090000, &s->dbg_uart->mr);
+        }
+
+        /* Companion-ready page used by the early handshakes. */
+        if (getenv("D780_MCU_READY")) {
+            memory_region_init_io(&s->mcu, OBJECT(s), &d780_ready_ops, s,
+                                  "nikon-d780.mcu", 0x1000);
+            memory_region_add_subregion_overlap(sysmem, 0x2004A000, &s->mcu,
+                                                2);
+        }
 
         /* Display surface hypothesis: a 4 MiB page the firmware can write
          * pixels to.  Same idea as the z6/z7 display mapping; the real
