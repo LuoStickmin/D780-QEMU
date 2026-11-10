@@ -106,6 +106,8 @@ typedef struct NikonD780MachineState {
     bool io_stub;               /* map A2/AD/AE/A340 register-block stubs  */
     bool e6_prep;               /* patch the D780 page table + map stacks  */
     struct D750IoStub *io_blocks[4];
+    struct D750IoStub *e6_io;
+
     uint64_t mpcore_base;       /* GIC/timers/watchdog block address       */
     bool strict;
     uint32_t uart_status;
@@ -260,6 +262,7 @@ typedef struct D750IoStub {
     uint64_t base;
     uint32_t size;
     uint32_t *regs;
+    uint32_t ticks;
 } D750IoStub;
 
 static uint64_t d750_io_stub_read(void *opaque, hwaddr addr, unsigned size)
@@ -267,6 +270,17 @@ static uint64_t d750_io_stub_read(void *opaque, hwaddr addr, unsigned size)
     D750IoStub *s = opaque;
 
     if (s->base + addr == D750_IO_AE_READY) {
+        return 1;
+    }
+    /* E6 timer block 0x04266000: [base+8] is a free-running counter used by
+     * delay loops; return an advancing value on every read. */
+    if (s->base == 0x04200000 && addr == 0x66008) {
+        s->ticks += 0x1000;
+        return s->ticks;
+    }
+    /* Many E6 channels use [page+4] as a completion/status word polled for
+     * bit 0.  Report "done" there so command waits terminate. */
+    if (s->base == 0x04200000 && (addr & 0xFFF) == 4) {
         return 1;
     }
     if (addr + size > s->size) {
@@ -1493,6 +1507,7 @@ static void nikon_d750_init(MachineState *machine)
     /* D780 boot SRAM, high stacks and the 0x20022300 poll word. */
     if (s->e6_prep) {
         uint8_t ready[4];
+        struct D750IoStub *st;
 
         memory_region_init_ram(&s->e6sram, NULL, "nikon-d780.e6sram",
                                0x10000, &error_fatal);
@@ -1500,6 +1515,17 @@ static void nikon_d750_init(MachineState *machine)
         memory_region_init_ram(&s->e6stack, NULL, "nikon-d780.e6stack",
                                0x4000000, &error_fatal);
         memory_region_add_subregion(sysmem, 0xC0000000, &s->e6stack);
+
+        /* E6 0x0420_0000 register block: read back what was written. */
+        st = g_new0(struct D750IoStub, 1);
+        st->base = 0x04200000;
+        st->size = 0x100000;
+        st->regs = g_new0(uint32_t, st->size / 4);
+        memory_region_init_io(&st->mr, OBJECT(s), &d750_io_stub_ops, st,
+                              "nikon-d780.io-0420", st->size);
+        memory_region_add_subregion(sysmem, st->base, &st->mr);
+        s->e6_io = st;
+
         if (!s->auxram_size) {
             memory_region_init_ram(&s->auxram, NULL, "nikon-d780.e6ram",
                                    4 * MiB, &error_fatal);
@@ -1509,6 +1535,7 @@ static void nikon_d750_init(MachineState *machine)
         stl_le_p(ready, 1);
         rom_add_blob_fixed("d750.e6-ready", ready, sizeof(ready), 0x20022300);
         rom_add_blob_fixed("d750.e6-ready2", ready, sizeof(ready), 0x20070008);
+        rom_add_blob_fixed("d750.e6-ready3", ready, sizeof(ready), 0x20010038);
     }
 
     /* EXPEED 4 register-block stubs: A2/AD/AE/A340. */
@@ -1722,7 +1749,7 @@ static void nikon_d750_class_init(ObjectClass *oc, const void *data)
         NULL
     };
 
-    mc->desc = "Nikon D780 (EXPEED 6) validation prototype (E6 research, experimental)";
+    mc->desc = "Nikon D780 (EXPEED 6, E6) validation prototype (experimental)";
     mc->init = nikon_d750_init;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("cortex-a15");
     mc->valid_cpu_types = valid_cpu_types;
