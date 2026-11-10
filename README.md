@@ -25,8 +25,16 @@ Nikon D780（EXPEED 6 / E6）固件研究用 QEMU 原型机器。
   （调度/空闲路径）；
 - 两个 CPU 都需要启动（firmware 在 `0x1011C014` 等待第二个核）。
 
-下一步：确认 `0x1011D8F4` 是 idle 还是等待定时器中断；必要时给
-`0x04266000` 定时器加 IRQ。
+`0x1011D8F4` 经 RSP 采样确认**不是 idle/WFI**：它在自旋等待
+`[r4+4] = 0x00020002` 的高 16 位清零（r4 指向
+`{id=0x0E, pending, fn=0x101058C8, ctx}` 工作项）。采样时 GIC
+（`0xE0001100`/`0xE0001000`/`0xE0002000`）全为 0，固件还没有使能任何
+GIC 中断，所以给 `0x04266000` 加 IRQ 暂时不会被接收。
+
+`secondary-pc=0` 实验（CPU1 从 0 执行）会让 SVC 归零，说明 CPU1 必须走
+固件自己的 secondary 路径。
+
+下一步：找 CPU1 的 secondary entry，或找谁负责完成 `0x101058C8` 工作项。
 
 细节见 [docs/status.md](docs/status.md)。
 

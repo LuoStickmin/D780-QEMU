@@ -90,6 +90,7 @@ typedef struct NikonD780MachineState {
     char *flash_path;
     char *boot;                 /* "entry" (M0) or "stub" (M1)             */
     uint64_t entry;             /* UINT64_MAX means "use the inferred one" */
+    uint64_t secondary_pc;      /* CPU1+ start PC; UINT64_MAX = same as CPU0 */
     uint64_t payload_base;      /* where the payload image is loaded        */
     uint64_t a1010_base;        /* where the a1010 module is mapped        */
     uint32_t a1010_size;        /* bytes actually loaded, 0 = none         */
@@ -597,6 +598,29 @@ static void nikon_d750_set_entry(Object *obj, Visitor *v, const char *name,
         return;
     }
     s->entry = value;
+}
+
+static void nikon_d750_get_secondary_pc(Object *obj, Visitor *v,
+                                        const char *name, void *opaque,
+                                        Error **errp)
+{
+    NikonD780MachineState *s = NIKON_D780_MACHINE(obj);
+    uint64_t value = s->secondary_pc;
+
+    visit_type_uint64(v, name, &value, errp);
+}
+
+static void nikon_d750_set_secondary_pc(Object *obj, Visitor *v,
+                                        const char *name, void *opaque,
+                                        Error **errp)
+{
+    NikonD780MachineState *s = NIKON_D780_MACHINE(obj);
+    uint64_t value;
+
+    if (!visit_type_uint64(v, name, &value, errp)) {
+        return;
+    }
+    s->secondary_pc = value;
 }
 
 static void nikon_d750_get_payload_base(Object *obj, Visitor *v,
@@ -1682,7 +1706,8 @@ static void nikon_d750_init(MachineState *machine)
             cpu->env.regs[13] = D750_RAM_BASE + machine->ram_size - 0x100;
             cpu->env.regs[14] = D750_HALT_TRAMPOLINE;
             cpu->env.regs[0] = 0;
-            cpu_set_pc(cs, entry);
+            cpu_set_pc(cs, (i > 0 && s->secondary_pc != UINT64_MAX)
+                       ? s->secondary_pc : entry);
         }
     }
 
@@ -1716,6 +1741,7 @@ static void nikon_d750_instance_init(Object *obj)
     NikonD780MachineState *s = NIKON_D780_MACHINE(obj);
 
     s->entry = 0x10020000;
+    s->secondary_pc = UINT64_MAX;
     s->payload_base = 0x10020000;
     s->boot = g_strdup("entry");
     s->a1010_base = D750_A1010_BASE;
@@ -1773,6 +1799,12 @@ static void nikon_d750_class_init(ObjectClass *oc, const void *data)
                               NULL, NULL);
     object_class_property_set_description(oc, "entry",
         "Initial PC; default is the inferred payload entry (0x9027D52C)");
+    object_class_property_add(oc, "secondary-pc", "uint64",
+                              nikon_d750_get_secondary_pc,
+                              nikon_d750_set_secondary_pc, NULL, NULL);
+    object_class_property_set_description(oc, "secondary-pc",
+        "Start PC for CPU1+ (UINT64_MAX = same as CPU0); try 0 for a "
+        "release-loop style secondary startup");
     object_class_property_add(oc, "payload-base", "uint64",
                               nikon_d750_get_payload_base,
                               nikon_d750_set_payload_base, NULL, NULL);
