@@ -247,6 +247,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             html = (HERE / "gui.html").read_bytes()
             self._send(200, html, "text/html; charset=utf-8")
+        elif self.path in ("/camera", "/camera.html"):
+            html = (HERE / "camera.html").read_bytes()
+            self._send(200, html, "text/html; charset=utf-8")
         elif self.path.startswith("/api/status"):
             self._json(self.monitor.status())
         elif self.path.startswith("/api/log"):

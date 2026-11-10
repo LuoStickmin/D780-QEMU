@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D780 原机 GUI 模拟</title>
+<style>
+  :root {
+    --frame: #1a1a1c; --lcd: #101012; --fg: #e9e9e9; --dim: #9a9a9a;
+    --sel: #f4c400; --sel-fg: #141414; --line: #2a2a2e; --accent: #7ac4ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #0b0b0d;
+    display: flex; align-items: center; justify-content: center;
+    font: 15px/1.4 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    color: var(--fg); padding: 28px 16px;
+  }
+  .camera { width: min(1060px, 96vw); }
+  .topline { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+  .topline h1 { font-size: 17px; margin: 0; letter-spacing: .5px; }
+  .topline .tag { color: var(--dim); font-size: 12px; }
+  .lcdwrap {
+    background: var(--frame); border: 1px solid #333; border-radius: 14px;
+    padding: 14px; box-shadow: 0 18px 50px rgba(0,0,0,.55);
+  }
+  .lcd {
+    position: relative; aspect-ratio: 4 / 3; width: 100%;
+    background: var(--lcd); border: 1px solid #000; border-radius: 6px;
+    overflow: hidden; display: flex; flex-direction: column;
+    font-size: clamp(12px, 1.55vw, 18px);
+  }
+  /* status bar */
+  .statusbar {
+    display: flex; align-items: center; gap: 1.1em; padding: .5em .8em;
+    border-bottom: 1px solid var(--line); color: var(--fg); flex: 0 0 auto;
+  }
+  .sb-mode { color: var(--sel); font-weight: 700; }
+  .sb-spacer { flex: 1; }
+  .sb-item { color: var(--dim); }
+  .sb-item b { color: var(--fg); font-weight: 600; }
+  .battery {
+    width: 2.2em; height: .9em; border: 1px solid var(--dim);
+    border-radius: 2px; position: relative; display: inline-block;
+  }
+  .battery::after {
+    content: ""; position: absolute; right: -4px; top: 25%;
+    width: 3px; height: 50%; background: var(--dim); border-radius: 0 1px 1px 0;
+  }
+  .battery i { position: absolute; left: 1px; top: 1px; bottom: 1px; width: 78%; background: var(--fg); }
+  /* body: rail + content */
+  .body { flex: 1; display: flex; min-height: 0; }
+  .rail {
+    width: 11.5em; border-right: 1px solid var(--line); padding: .5em 0;
+    display: flex; flex-direction: column; gap: .15em; overflow: auto;
+  }
+  .tab {
+    padding: .55em .8em; color: var(--dim); cursor: pointer; white-space: nowrap;
+    border-left: 3px solid transparent;
+  }
+  .tab.active { color: var(--fg); background: #1d1d22; border-left-color: var(--sel); }
+  .tab:hover { color: var(--fg); }
+  .content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .titlebar {
+    padding: .5em .9em; border-bottom: 1px solid var(--line);
+    color: var(--sel); font-weight: 600; flex: 0 0 auto;
+  }
+  .list { flex: 1; overflow: auto; padding: .25em 0; }
+  .row {
+    display: flex; align-items: center; gap: .6em; padding: .42em .9em;
+    cursor: pointer; border-left: 3px solid transparent;
+  }
+  .row .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .value { color: var(--dim); white-space: nowrap; }
+  .row.sel { background: var(--sel); color: var(--sel-fg); border-left-color: #fff; }
+  .row.sel .value { color: #333; }
+  .row.disabled { opacity: .45; }
+  /* shooting screen */
+  .shooting {
+    flex: 1; display: flex; flex-direction: column; justify-content: center;
+    padding: 1.2em 1.6em; gap: .8em;
+  }
+  .shooting .big { font-size: 3.1em; letter-spacing: .06em; }
+  .shooting .row2 { display: flex; gap: 2.2em; color: var(--dim); }
+  .shooting .row2 b { color: var(--fg); font-size: 1.35em; font-weight: 600; display: block; }
+  .shooting .note { color: var(--dim); font-size: .85em; margin-top: .6em; }
+  .toast {
+    position: absolute; left: 50%; bottom: 2.6em; transform: translateX(-50%);
+    background: rgba(0,0,0,.82); border: 1px solid var(--line);
+    color: var(--fg); padding: .55em 1em; border-radius: 8px;
+    opacity: 0; transition: opacity .18s; pointer-events: none; font-size: .9em;
+  }
+  .toast.show { opacity: 1; }
+  .hints {
+    display: flex; gap: 1.2em; padding: .4em .8em; border-top: 1px solid var(--line);
+    color: var(--dim); font-size: .8em; flex: 0 0 auto;
+  }
+  /* buttons */
+  .buttons {
+    display: flex; align-items: center; justify-content: center; gap: 18px;
+    margin-top: 14px; flex-wrap: wrap;
+  }
+  .dpad { display: grid; grid-template-columns: repeat(3, 46px); grid-template-rows: repeat(3, 46px); gap: 4px; }
+  .dpad button { border-radius: 10px; }
+  .dpad .ok { background: #2b2b30; font-weight: 700; }
+  button {
+    background: #26262b; color: var(--fg); border: 1px solid #3a3a40;
+    border-radius: 10px; padding: 10px 14px; font: inherit; cursor: pointer;
+    min-width: 46px;
+  }
+  button:hover { border-color: var(--accent); }
+  button:active { transform: translateY(1px); }
+  .key { font-size: .8em; color: var(--dim); display: block; }
+  .spacer { width: 10px; }
+  @media (max-width: 720px) {
+    .rail { width: 9.5em; }
+    .lcd { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="camera">
+  <div class="topline">
+    <h1>D780 原机 GUI 模拟</h1>
+    <span class="tag">menu mock · 非固件渲染 · 暂无 LV</span>
+  </div>
+
+  <div class="lcdwrap">
+    <div class="lcd" id="lcd">
+      <div class="statusbar">
+        <span class="sb-mode" id="sb-mode">M</span>
+        <span class="sb-item"><b id="sb-shutter">1/8000</b></span>
+        <span class="sb-item"><b id="sb-aperture">F5.6</b></span>
+        <span class="sb-item">ISO <b id="sb-iso">100</b></span>
+        <span class="sb-spacer"></span>
+        <span class="sb-item">WB <b>AUTO1</b></span>
+        <span class="sb-item" id="sb-quality">NEF+JPEG FINE</span>
+        <span class="sb-item"><i class="battery"><i></i></i></span>
+        <span class="sb-item"><b id="sb-shots">1234</b></span>
+      </div>
+
+      <div class="body">
+        <div class="rail" id="rail"></div>
+        <div class="content">
+          <div class="titlebar" id="titlebar">照片拍摄菜单</div>
+          <div class="list" id="list"></div>
+          <div class="shooting" id="shooting" style="display:none"></div>
+        </div>
+      </div>
+
+      <div class="hints">
+        <span>↑↓ 选择</span><span>←→ 切换标签</span><span>Enter/OK 进入</span>
+        <span>Esc/MENU 返回</span><span>Lv 暂不支持</span>
+      </div>
+      <div class="toast" id="toast"></div>
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button onclick="key('MENU')">MENU</button>
+    <button onclick="key('i')">i</button>
+    <div class="dpad">
+      <span></span><button onclick="key('UP')">▲</button><span></span>
+      <button onclick="key('LEFT')">◀</button>
+      <button class="ok" onclick="key('OK')">OK</button>
+      <button onclick="key('RIGHT')">▶</button>
+      <span></span><button onclick="key('DOWN')">▼</button><span></span>
+    </div>
+    <button onclick="key('PLAY')">播放</button>
+    <button onclick="key('LV')">Lv</button>
+  </div>
+  <div class="buttons" style="margin-top:8px">
+    <span class="key">键盘：方向键 / Enter / Esc / M / P / L</span>
+  </div>
+</div>
+
+<script>
+const TABS = [
+  {
+    name: "播放",
+    title: "播放",
+    items: [
+      { label: "播放（无图像）", disabled: true },
+      { label: "删除", value: "—" },
+      { label: "播放显示选项", value: "›" },
+    ],
+  },
+  {
+    name: "照片拍摄菜单",
+    title: "照片拍摄菜单",
+    items: [
+      { label: "文件命名", value: "DSC" },
+      { label: "插槽2中存储卡的作用", value: "额外空间" },
+      { label: "影像品质", value: "NEF+JPEG FINE", cycle: ["JPEG FINE", "NEF+JPEG FINE", "NEF(RAW)", "TIFF"] },
+      { label: "影像尺寸", value: "L (6048×4024)", cycle: ["L (6048×4024)", "M (4528×3016)", "S (3024×2016)"] },
+      { label: "影像区域", value: "FX (36×24)", cycle: ["FX (36×24)", "DX (24×16)", "1.2× (30×20)"] },
+      { label: "JPEG 压缩", value: "最佳质量", cycle: ["最佳质量", "大小优先", "压缩优先"] },
+      { label: "NEF(RAW) 记录", value: "14位无损压缩", cycle: ["12位", "14位", "14位无损压缩", "14位未压缩"] },
+      { label: "ISO 感光度设定", value: "›" },
+      { label: "白平衡", value: "AUTO1", cycle: ["AUTO1", "AUTO2", "晴天", "阴天", "白炽灯", "荧光灯", "手动预设"] },
+      { label: "设定优化校准", value: "标准", cycle: ["标准", "自然", "鲜艳", "单色", "人像", "风景", "扁平"] },
+      { label: "色空间", value: "sRGB", cycle: ["sRGB", "Adobe RGB"] },
+      { label: "动态D-Lighting", value: "关闭", cycle: ["关闭", "低", "标准", "高", "自动"] },
+      { label: "长时间曝光降噪", value: "开启" },
+      { label: "高ISO降噪", value: "标准", cycle: ["关闭", "低", "标准", "高"] },
+      { label: "暗角控制", value: "标准", cycle: ["关闭", "弱", "标准", "强"] },
+      { label: "自动失真控制", value: "开启" },
+      { label: "闪烁消减", value: "关闭" },
+      { label: "自动包围" },
+      { label: "多重曝光" },
+      { label: "HDR（高动态范围）" },
+      { label: "间隔拍摄" },
+      { label: "延时摄影视频" },
+      { label: "静音拍摄", value: "关闭", cycle: ["关闭", "开启"] },
+    ],
+  },
+  {
+    name: "动画拍摄菜单",
+    title: "动画拍摄菜单",
+    items: [
+      { label: "文件命名", value: "DSC" },
+      { label: "影像品质", value: "H.264 高", cycle: ["H.264 高", "H.264 标准"] },
+      { label: "动画画面尺寸", value: "3840×2160 30p", cycle: ["3840×2160 30p", "1920×1080 60p", "1920×1080 30p"] },
+      { label: "动画类型", value: "H.264/MPEG-4 AVC" },
+      { label: "白平衡", value: "AUTO1" },
+      { label: "设定优化校准", value: "标准" },
+      { label: "动态D-Lighting", value: "关闭" },
+      { label: "高ISO降噪", value: "标准" },
+      { label: "麦克风灵敏度", value: "自动" },
+      { label: "频闪消减", value: "自动" },
+      { label: "电子VR", value: "关闭", cycle: ["关闭", "开启"] },
+      { label: "时间码" },
+    ],
+  },
+  {
+    name: "自定义设定菜单",
+    title: "自定义设定菜单",
+    items: [
+      { label: "自动对焦", value: "›" },
+      { label: "测光/曝光", value: "›" },
+      { label: "计时/AE锁定", value: "›" },
+      { label: "拍摄/显示", value: "›" },
+      { label: "包围/闪光", value: "›" },
+      { label: "控制", value: "›" },
+      { label: "动画", value: "›" },
+    ],
+  },
+  {
+    name: "设定菜单",
+    title: "设定菜单",
+    items: [
+      { label: "格式化存储卡", value: "—" },
+      { label: "语言", value: "简体中文", cycle: ["简体中文", "English", "日本語"] },
+      { label: "时区和日期", value: "2026/11/10 16:00" },
+      { label: "显示屏亮度", value: "0", cycle: ["-3", "-2", "-1", "0", "1", "2", "3"] },
+      { label: "信息显示", value: "自动", cycle: ["自动", "亮", "暗"] },
+      { label: "自动旋转图像", value: "开启" },
+      { label: "图像注释", value: "关闭" },
+      { label: "版权信息", value: "关闭" },
+      { label: "蜂鸣音", value: "关闭", cycle: ["关闭", "低", "标准", "高"] },
+      { label: "触控控制", value: "开启" },
+      { label: "HDMI", value: "关闭" },
+      { label: "位置数据", value: "关闭" },
+      { label: "飞行模式", value: "关闭", cycle: ["关闭", "开启"] },
+      { label: "连接", value: "›" },
+      { label: "电池信息", value: "—" },
+      { label: "空插槽释放锁定", value: "开启" },
+      { label: "保存/加载设定", value: "›" },
+      { label: "重设所有设定", value: "—" },
+      { label: "固件版本", value: "C 1.00" },
+    ],
+  },
+  {
+    name: "润饰菜单",
+    title: "润饰菜单",
+    items: [
+      { label: "i-D-Lighting" },
+      { label: "红眼修正" },
+      { label: "裁切" },
+      { label: "单色" },
+      { label: "滤镜效果" },
+      { label: "图像合成" },
+      { label: "NEF(RAW) 处理" },
+      { label: "调整尺寸" },
+      { label: "D-Lighting" },
+      { label: "快速润饰" },
+      { label: "矫正" },
+      { label: "失真控制" },
+      { label: "鱼眼" },
+      { label: "色彩轮廓" },
+      { label: "彩色素描" },
+      { label: "并排比较" },
+    ],
+  },
+  {
+    name: "我的菜单",
+    title: "我的菜单",
+    items: [
+      { label: "添加项目", value: "›" },
+      { label: "删除项目", value: "›" },
+      { label: "排列项目", value: "›" },
+      { label: "选择标签", value: "›" },
+    ],
+  },
+];
+
+const state = {
+  screen: "menu",   // "menu" | "shooting"
+  tab: 1,
+  index: 0,
+  mode: "M",
+  shutter: "1/8000",
+  aperture: "F5.6",
+  iso: "100",
+  shots: 1234,
+};
+
+const $ = (id) => document.getElementById(id);
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove("show"), 1800);
+}
+
+function renderRail() {
+  const rail = $("rail");
+  rail.innerHTML = "";
+  TABS.forEach((tab, i) => {
+    const d = document.createElement("div");
+    d.className = "tab" + (i === state.tab && state.screen === "menu" ? " active" : "");
+    d.textContent = tab.name;
+    d.onclick = () => { state.screen = "menu"; state.tab = i; state.index = 0; render(); };
+    rail.appendChild(d);
+  });
+}
+
+function renderList() {
+  const tab = TABS[state.tab];
+  $("titlebar").textContent = tab.title;
+  const list = $("list");
+  list.innerHTML = "";
+  tab.items.forEach((item, i) => {
+    const row = document.createElement("div");
+    row.className = "row" + (i === state.index ? " sel" : "") + (item.disabled ? " disabled" : "");
+    row.innerHTML = '<span class="label"></span><span class="value"></span>';
+    row.querySelector(".label").textContent = item.label;
+    row.querySelector(".value").textContent = item.value || "";
+    row.onclick = () => { state.index = i; activate(); };
+    list.appendChild(row);
+  });
+  const sel = list.querySelector(".row.sel");
+  if (sel) sel.scrollIntoView({ block: "nearest" });
+}
+
+function renderShooting() {
+  const s = $("shooting");
+  s.style.display = "flex";
+  $("list").style.display = "none";
+  $("titlebar").style.display = "none";
+  s.innerHTML = `
+    <div class="big">${state.mode} &nbsp; ${state.shutter} &nbsp; ${state.aperture}</div>
+    <div class="row2">
+      <div>ISO<b>${state.iso}</b></div>
+      <div>白平衡<b>AUTO1</b></div>
+      <div>影像品质<b>NEF+JPEG FINE</b></div>
+      <div>剩余拍摄张数<b>${state.shots}</b></div>
+    </div>
+    <div class="note">拍摄信息画面（模拟）。按 MENU 进入菜单，按 OK 切换信息显示。</div>`;
+}
+
+function render() {
+  renderRail();
+  const menu = state.screen === "menu";
+  $("shooting").style.display = menu ? "none" : "flex";
+  $("list").style.display = menu ? "block" : "none";
+  $("titlebar").style.display = menu ? "block" : "none";
+  if (menu) renderList(); else renderShooting();
+  $("sb-mode").textContent = state.mode;
+  $("sb-shutter").textContent = state.shutter;
+  $("sb-aperture").textContent = state.aperture;
+  $("sb-iso").textContent = state.iso;
+  $("sb-shots").textContent = state.shots;
+}
+
+function activate() {
+  const item = TABS[state.tab].items[state.index];
+  if (!item || item.disabled) { toast("当前不可用"); return; }
+  if (item.cycle) {
+    const i = item.cycle.indexOf(item.value);
+    item.value = item.cycle[(i + 1) % item.cycle.length];
+    if (state.tab === 1 && item.label === "影像品质") $("sb-quality").textContent = item.value;
+    render();
+    return;
+  }
+  if (item.value === "›") { toast("子菜单（模拟占位）"); return; }
+  toast("已选择：" + item.label);
+}
+
+function key(k) {
+  if (k === "MENU") {
+    if (state.screen === "menu") { state.screen = "shooting"; }
+    else { state.screen = "menu"; state.index = 0; }
+    render(); return;
+  }
+  if (k === "OK") { if (state.screen === "menu") activate(); else state.screen = "menu"; render(); return; }
+  if (k === "ESC") { state.screen = "shooting"; render(); return; }
+  if (k === "LV") { toast("实时取景（LV）暂未实现"); return; }
+  if (k === "PLAY") { state.screen = "menu"; state.tab = 0; state.index = 0; render(); return; }
+  if (state.screen !== "menu") { if (k === "UP" || k === "DOWN" || k === "LEFT" || k === "RIGHT") { state.screen = "menu"; render(); } return; }
+  const tab = TABS[state.tab];
+  if (k === "UP") { state.index = (state.index + tab.items.length - 1) % tab.items.length; render(); }
+  else if (k === "DOWN") { state.index = (state.index + 1) % tab.items.length; render(); }
+  else if (k === "LEFT") { state.tab = (state.tab + TABS.length - 1) % TABS.length; state.index = 0; render(); }
+  else if (k === "RIGHT") { state.tab = (state.tab + 1) % TABS.length; state.index = 0; render(); }
+}
+
+window.addEventListener("keydown", (e) => {
+  const map = {
+    ArrowUp: "UP", ArrowDown: "DOWN", ArrowLeft: "LEFT", ArrowRight: "RIGHT",
+    Enter: "OK", Escape: "ESC", m: "MENU", M: "MENU", l: "LV", L: "LV", p: "PLAY", P: "PLAY",
+  };
+  const k = map[e.key];
+  if (k) { e.preventDefault(); key(k); }
+});
+
+render();
+</script>
+</body>
+</html>
