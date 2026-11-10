@@ -59,6 +59,24 @@ python3 tools/run.py \
 机器默认已经带 `payload-base=0x10020000`、`flash-size=0x2400000`、
 `e6-prep=on`，一般不需要再传。
 
+## 还需要什么（输入需求）
+
+D780（E6）与 D750（E4）、D850/D5（E5）一样，缺的都是**第一级 boot**。
+按优先级：
+
+1. **整片 SPI flash dump**（D780 或任一 E6/E5/E4 机型）——最直接，可能包含
+   boot 分区或第一级 loader；CH341A/测试夹读取，或从维修渠道获取。
+2. **Nikon 服务软件/维修固件里的 recovery/boot 镜像**（如 Tornado NKN 等）。
+3. **其他机型整片 dump**（D5100/D7000/D800）——理解 Nikon boot 分区结构。
+4. **硬件 UART 启动日志**——确认 boot ROM 之后第一段代码的加载地址与大小。
+5. **Z6/Z7 QEMU 社区关于 `0x40000000` 区域填充者的信息**（可选）。
+
+已经具备、无需再提供：`eg1510_012100.bi` 解密镜像、`nikon-d780` 机器、
+`e6-prep`/`early_control` 模型、E6 启动链与 `0x1011D8F4` 分析。
+
+没有新输入时仍可做：在 `eg1510` 里反查写 `0x40000000` 的 relocation 循环，
+判断 boot 是否其实在镜像内；继续 `0x101058C8` 工作项与调度器路径。
+
 ## 许可
 
 机器 overlay 与工具为 GPLv2；Nikon 固件版权归 Nikon Corporation，仓库不附带。
