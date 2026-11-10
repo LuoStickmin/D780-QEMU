@@ -113,7 +113,7 @@ typedef struct NikonD780MachineState {
     bool fb_on;                 /* map the display surface page            */
     struct D750IoStub *io_blocks[4];
     struct D750IoStub *e6_io;
-    struct D750IoStub *e6_extra[3];
+    struct D750IoStub *e6_extra[4];
 
     uint64_t mpcore_base;       /* GIC/timers/watchdog block address       */
     bool strict;
@@ -1632,7 +1632,8 @@ static void nikon_d750_init(MachineState *machine)
                 uint32_t size;
             } extras[] = {
                 { 0x2C090000, 0x1000 },
-                { 0x24074000, 0x1000 },
+                { 0x24040000, 0x40000 },
+                { 0x20180000, 0x10000 },
             };
             unsigned i;
 
