@@ -83,6 +83,7 @@ typedef struct NikonD780MachineState {
     MemoryRegion e6sram;        /* E6 boot SRAM at 0x04000000              */
     MemoryRegion e6stack;       /* E6 stacks at 0xC0000000                 */
     MemoryRegion e6vec;         /* E6 relocated vector table at 0xCC300000 */
+    MemoryRegion fb;            /* E6 display surface page at 0xCC200000   */
 
     MemoryRegion probe;         /* catch-all diagnostic window             */
     MemoryRegion uart;          /* candidate byte-register serial block    */
@@ -109,6 +110,7 @@ typedef struct NikonD780MachineState {
     bool mmu_bringup;           /* emulate the missing boot-ROM MMU setup  */
     bool io_stub;               /* map A2/AD/AE/A340 register-block stubs  */
     bool e6_prep;               /* patch the D780 page table + map stacks  */
+    bool fb_on;                 /* map the display surface page            */
     struct D750IoStub *io_blocks[4];
     struct D750IoStub *e6_io;
     struct D750IoStub *e6_extra[3];
@@ -1001,6 +1003,21 @@ static void nikon_d750_set_e6_prep(Object *obj, bool value, Error **errp)
     s->e6_prep = value;
 }
 
+static bool nikon_d750_get_display_buffer(Object *obj, Error **errp)
+{
+    NikonD780MachineState *s = NIKON_D780_MACHINE(obj);
+
+    return s->fb_on;
+}
+
+static void nikon_d750_set_display_buffer(Object *obj, bool value,
+                                          Error **errp)
+{
+    NikonD780MachineState *s = NIKON_D780_MACHINE(obj);
+
+    s->fb_on = value;
+}
+
 static void nikon_d750_get_lcd_base(Object *obj, Visitor *v,
                                     const char *name, void *opaque,
                                     Error **errp)
@@ -1638,6 +1655,15 @@ static void nikon_d750_init(MachineState *machine)
                                0x20000, &error_fatal);
         memory_region_add_subregion(sysmem, 0xCC300000, &s->e6vec);
 
+        /* Display surface hypothesis: a 4 MiB page the firmware can write
+         * pixels to.  Same idea as the z6/z7 display mapping; the real
+         * address will replace this once the display block is identified. */
+        if (s->fb_on) {
+            memory_region_init_ram(&s->fb, NULL, "nikon-d780.fb",
+                                   4 * MiB, &error_fatal);
+            memory_region_add_subregion(sysmem, 0xCC200000, &s->fb);
+        }
+
         if (!s->auxram_size) {
             memory_region_init_ram(&s->auxram, NULL, "nikon-d780.e6ram",
                                    4 * MiB, &error_fatal);
@@ -1842,6 +1868,7 @@ static void nikon_d750_instance_init(Object *obj)
     s->loader_copies = false;
     s->io_stub = false;
     s->e6_prep = true;
+    s->fb_on = false;
     s->mmu_bringup = true;
     s->mmu_table = 0;
     s->auxram_size = 0;
@@ -1991,6 +2018,12 @@ static void nikon_d750_class_init(ObjectClass *oc, const void *data)
     object_class_property_set_description(oc, "e6-prep",
         "D780 prep: turn the page table at payload+0x10000 into identity "
         "sections and map boot SRAM 0x04000000 plus stacks at 0xC0000000");
+    object_class_property_add_bool(oc, "display-buffer",
+                                   nikon_d750_get_display_buffer,
+                                   nikon_d750_set_display_buffer);
+    object_class_property_set_description(oc, "display-buffer",
+        "Map 0xCC200000..0xCC5FFFFF as a 4 MiB display surface page "
+        "(hypothesis; same idea as the z6/z7 display mapping)");
 
     object_class_property_add(oc, "lcd-base", "uint64",
                               nikon_d750_get_lcd_base,
